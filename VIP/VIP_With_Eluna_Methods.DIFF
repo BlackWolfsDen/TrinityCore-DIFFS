@@ -13,58 +13,69 @@ index 2749c08..234c43f 100644
 +	PrepareStatement(LOGIN_SET_VOTES, "UPDATE account SET `votes`=? WHERE `id`=?", CONNECTION_ASYNC);
  }
 diff --git a/src/server/database/Database/Implementation/LoginDatabase.h b/src/server/database/Database/Implementation/LoginDatabase.h
-index a3789fa..5ac442e 100644
+index a3789fa..c54411b 100644
 --- a/src/server/database/Database/Implementation/LoginDatabase.h
 +++ b/src/server/database/Database/Implementation/LoginDatabase.h
-@@ -113,6 +113,12 @@ enum LoginDatabaseStatements
+@@ -113,7 +113,13 @@ enum LoginDatabaseStatements
  
      LOGIN_INS_ACCOUNT_MUTE,
      LOGIN_SEL_ACCOUNT_MUTE_INFO,
+-    MAX_LOGINDATABASE_STATEMENTS
 +
 +	LOGIN_LOAD_VIP,
 +	LOGIN_SET_VIP,
 +	LOGIN_SET_MG,
 +	LOGIN_SET_VOTES,
 +	
-     MAX_LOGINDATABASE_STATEMENTS
++	MAX_LOGINDATABASE_STATEMENTS
  };
  
+ class LoginDatabaseConnection : public MySQLConnection
+ 
 diff --git a/src/server/database/Database/Implementation/WorldDatabase.cpp b/src/server/database/Database/Implementation/WorldDatabase.cpp
-index 7a183d5..46c5639 100644
+index 7a183d5..bbac223 100644
 --- a/src/server/database/Database/Implementation/WorldDatabase.cpp
 +++ b/src/server/database/Database/Implementation/WorldDatabase.cpp
-@@ -91,4 +91,6 @@ void WorldDatabaseConnection::DoPrepareStatements()
+@@ -91,4 +91,8 @@ void WorldDatabaseConnection::DoPrepareStatements()
      PrepareStatement(WORLD_DEL_DISABLES, "DELETE FROM disables WHERE entry = ? AND sourceType = ?", CONNECTION_ASYNC);
      PrepareStatement(WORLD_UPD_CREATURE_ZONE_AREA_DATA, "UPDATE creature SET zoneId = ?, areaId = ? WHERE guid = ?", CONNECTION_ASYNC);
      PrepareStatement(WORLD_UPD_GAMEOBJECT_ZONE_AREA_DATA, "UPDATE gameobject SET zoneId = ?, areaId = ? WHERE guid = ?", CONNECTION_ASYNC);
 +
++	PrepareStatement(WORLD_SET_CREATURE_VIP, "UPDATE creature_template SET `vip`=? WHERE `entry`=?", CONNECTION_ASYNC);
++	PrepareStatement(WORLD_SET_CREATURE_MG, "UPDATE creature_template SET `mg`=? WHERE `entry`=?", CONNECTION_ASYNC);
 +	PrepareStatement(WORLD_SET_ITEM_VIP, "UPDATE item_template SET `vip`=? WHERE `entry`=?", CONNECTION_ASYNC);
  }
 diff --git a/src/server/database/Database/Implementation/WorldDatabase.h b/src/server/database/Database/Implementation/WorldDatabase.h
-index 6ac4ce5..1360d5d 100644
+index 6ac4ce5..96327e4 100644
 --- a/src/server/database/Database/Implementation/WorldDatabase.h
 +++ b/src/server/database/Database/Implementation/WorldDatabase.h
-@@ -100,6 +100,8 @@ enum WorldDatabaseStatements
+@@ -100,7 +100,11 @@ enum WorldDatabaseStatements
      WORLD_UPD_CREATURE_ZONE_AREA_DATA,
      WORLD_UPD_GAMEOBJECT_ZONE_AREA_DATA,
  
+-    MAX_WORLDDATABASE_STATEMENTS
++	WORLD_SET_CREATURE_VIP,
++	WORLD_SET_CREATURE_MG,
 +	WORLD_SET_ITEM_VIP,
-+
-     MAX_WORLDDATABASE_STATEMENTS
++	
++	MAX_WORLDDATABASE_STATEMENTS
  };
  
+ class WorldDatabaseConnection : public MySQLConnection
+
 diff --git a/src/server/game/Entities/Player/Grumboz_VIP_Core.cpp b/src/server/game/Entities/Player/Grumboz_VIP_Core.cpp
 new file mode 100644
-index 0000000..28e5f8d
+index 0000000..47018b0
 --- /dev/null
 +++ b/src/server/game/Entities/Player/Grumboz_VIP_Core.cpp
-@@ -0,0 +1,932 @@
+@@ -0,0 +1,1040 @@
 +// Vip core engine
 +// By slp13at420 of EmuDevs.com
 +
 +#include "AccountMgr.h"
 +#include "chat.h"
 +#include "Config.h"
++#include "Group.h"
 +#include "Grumboz_VIP_Core.h"
 +#include "Language.h"
 +#include "ObjectMgr.h"
@@ -101,6 +112,7 @@ index 0000000..28e5f8d
 +std::unordered_map<uint8, VipMallGPS> MALL;
 +std::unordered_map<uint8, VipHomeGPS> HOME;
 +std::unordered_map<uint32, VipHearthStoneGPS> HearthStone;
++std::unordered_map<uint32, CreatureVIP>CKR;
 +
 +VIP::VIP() { }
 +
@@ -123,7 +135,7 @@ index 0000000..28e5f8d
 +{
 +	std::string pName = player->GetName();
 +	uint32 acct_id = player->GetSession()->GetAccountId();
-+	uint8 PlayerLogInVip = VIP::GetVIP(acct_id);
++	uint8 PlayerLogInVip = VIP::GetPlayerVIP(acct_id);
 +
 +	SessionMap sessions = sWorld->GetAllSessions(); // GetPlayersInWorld
 +
@@ -132,7 +144,7 @@ index 0000000..28e5f8d
 +		if (!itr->second)
 +			continue;
 +
-+		uint8 ItrVip = VIP::GetVIP(itr->second->GetAccountId());
++		uint8 ItrVip = VIP::GetPlayerVIP(itr->second->GetAccountId());
 +
 +		if (PlayerLogInVip <= ItrVip) // if target is same as or higher. won't announce to lower vip's.
 +		{
@@ -178,6 +190,25 @@ index 0000000..28e5f8d
 +			} while(VIPItemQery->NextRow());
 +		}
 +		
++		QueryResult VIPCreatureQery = WorldDatabase.Query("SELECT entry, vip, mg FROM creature_template;");
++
++		if (VIPCreatureQery)
++		{
++			do
++			{
++				Field* fields = VIPCreatureQery->Fetch();
++				uint32 entry_id = fields[0].GetUInt32();
++				uint32 vip = fields[1].GetUInt8();
++				uint32 mg = fields[2].GetUInt32();
++
++				CreatureVIP& data2 = CKR[entry_id];
++				// Save the DB values to the MyData object
++				data2.vip = vip;
++				data2.mg = mg;
++
++			} while (VIPCreatureQery->NextRow());
++		}
++		
 +		QueryResult gpsQery = WorldDatabase.Query("SELECT * FROM hearthstone;");
 +
 +		if (gpsQery)
@@ -193,49 +224,49 @@ index 0000000..28e5f8d
 +				float z = fields[4].GetFloat();
 +				float o = fields[5].GetFloat();
 +
-+				VipHearthStoneGPS& data2 = HearthStone[guid];
++				VipHearthStoneGPS& data3 = HearthStone[guid];
 +				// Save the DB values to the MyData object
-+				data2.guid = guid;
-+				data2.map_id = map_id;
-+				data2.x = x;
-+				data2.y = y;
-+				data2.z = z;
-+				data2.o = o;
++				data3.guid = guid;
++				data3.map_id = map_id;
++				data3.x = x;
++				data3.y = y;
++				data3.z = z;
++				data3.o = o;
 +
 +			} while (gpsQery->NextRow());
 +		}
 +
-+		VipMallGPS& data3 = MALL[0];
-+		// Save the DB values to the MyData object
-+		data3.map_id = 530;
-+		data3.x = -1800.3104f;
-+		data3.y = 5315.0424f;
-+		data3.z = -12.4276f;
-+		data3.o = 2.1062f;
-+
-+		VipMallGPS& data4 = MALL[1]; // like Lua table VIP[acctId].vip
++		VipMallGPS& data4 = MALL[0];
 +		// Save the DB values to the MyData object
 +		data4.map_id = 530;
-+		data4.x = -1921.8005f;
-+		data4.y = 5546.6264f;
-+		data4.z = -12.4278f;
-+		data4.o = 5.2321f;
++		data4.x = -1800.3104f;
++		data4.y = 5315.0424f;
++		data4.z = -12.4276f;
++		data4.o = 2.1062f;
 +
-+		VipHomeGPS& data5 = HOME[0]; // like Lua table VIP[acctId].vip
++		VipMallGPS& data5 = MALL[1]; // like Lua table VIP[acctId].vip
 +		// Save the DB values to the MyData object
-+		data5.map_id = 0;
-+		data5.x = -4906.3911f;
-+		data5.y = -970.9063f;
-+		data5.z = 501.4540f;
-+		data5.o = 2.3338f;
++		data5.map_id = 530;
++		data5.x = -1921.8005f;
++		data5.y = 5546.6264f;
++		data5.z = -12.4278f;
++		data5.o = 5.2321f;
 +
-+		VipHomeGPS& data6 = HOME[1]; // like Lua table VIP[acctId].vip
++		VipHomeGPS& data6 = HOME[0]; // like Lua table VIP[acctId].vip
 +		// Save the DB values to the MyData object
-+		data6.map_id = 1;
-+		data6.x = 1604.4882f;
-+		data6.y = -4394.3603f;
-+		data6.z = 9.9671f;
-+		data6.o = 3.5517f;
++		data6.map_id = 0;
++		data6.x = -4906.3911f;
++		data6.y = -970.9063f;
++		data6.z = 501.4540f;
++		data6.o = 2.3338f;
++
++		VipHomeGPS& data7 = HOME[1]; // like Lua table VIP[acctId].vip
++		// Save the DB values to the MyData object
++		data7.map_id = 1;
++		data7.x = 1604.4882f;
++		data7.y = -4394.3603f;
++		data7.z = 9.9671f;
++		data7.o = 3.5517f;
 +
 +		TC_LOG_INFO("server.loading", "___________________________________");
 +		TC_LOG_INFO("server.loading", "|   VIP Teleport GPS's : Loaded   |");
@@ -332,7 +363,21 @@ index 0000000..28e5f8d
 +	return VIP_LEVEL_BONUS;
 +};
 +
-+void VIP::SetVIP(uint32 acct_id, uint8 pvip)
++void VIP::SetHearthStone(uint32 guid, uint32 map_id, float x, float y, float z, float o)
++{
++	WorldDatabase.PExecute("UPDATE `hearthstone` SET `map_id`='%u', `x`='%f', `y`='%f', `z`='%f', `o`='%f' WHERE guid=%u;", map_id, x, y, z, o, guid);
++
++	VipHearthStoneGPS& data = HearthStone[guid];
++	// Save the DB values to the MyData object
++	data.guid = guid;
++	data.map_id = map_id;
++	data.x = x;
++	data.y = y;
++	data.z = z;
++	data.o = o;
++}
++
++void VIP::SetPlayerVIP(uint32 acct_id, uint8 pvip)
 +{ // you must update votes first for the dead mans check
 +
 +	if (VIP_VOTE_ENABLE)
@@ -360,7 +405,7 @@ index 0000000..28e5f8d
 +	LoginDatabase.Execute(stmt);
 +};
 +
-+void VIP::SetMG(uint32 acct_id, uint32 pmg)
++void VIP::SetPlayerMG(uint32 acct_id, uint32 pmg)
 +{
 +	PreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SET_MG);
 +	stmt->setUInt32(0, pmg);
@@ -370,36 +415,7 @@ index 0000000..28e5f8d
 +	Vip[acct_id].mg = pmg;
 +};
 +
-+uint8 VIP::GetVIP(uint32 acct_id)
-+{
-+	return Vip[acct_id].vip;
-+};
-+
-+uint32 VIP::GetMG(uint32 acct_id)
-+{
-+	return Vip[acct_id].mg;
-+};
-+
-+uint32 VIP::GetVOTES(uint32 acct_id)
-+{
-+	return Vip[acct_id].votes;
-+};
-+
-+void VIP::SetHearthStone(uint32 guid, uint32 map_id, float x, float y, float z, float o)
-+{
-+	WorldDatabase.PExecute("UPDATE `hearthstone` SET `map_id`='%u', `x`='%f', `y`='%f', `z`='%f', `o`='%f' WHERE guid=%u;", map_id, x, y, z, o, guid);
-+
-+	VipHearthStoneGPS& data = HearthStone[guid];
-+	// Save the DB values to the MyData object
-+	data.guid = guid;
-+	data.map_id = map_id;
-+	data.x = x;
-+	data.y = y;
-+	data.z = z;
-+	data.o = o;
-+}
-+
-+void VIP::SetVOTES(uint32 acct_id, uint32 pvotes)
++void VIP::SetPlayerVOTES(uint32 acct_id, uint32 pvotes)
 +{
 +	PreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SET_VOTES);
 +	stmt->setUInt32(0, pvotes);
@@ -409,9 +425,23 @@ index 0000000..28e5f8d
 +	Vip[acct_id].votes = pvotes;
 +};
 +
++uint8 VIP::GetPlayerVIP(uint32 acct_id)
++{
++	return Vip[acct_id].vip;
++};
++
++uint32 VIP::GetPlayerMG(uint32 acct_id)
++{
++	return Vip[acct_id].mg;
++};
++
++uint32 VIP::GetPlayerVOTES(uint32 acct_id)
++{
++	return Vip[acct_id].votes;
++};
++
 +uint8 VIP::GetItemVIP(uint32 item_id)
 +{
-+	TC_LOG_INFO("server.loading", "VIP::ITEM_ID:%u", item_id);
 +	return ItemVip[item_id].vip;
 +};
 +
@@ -426,6 +456,39 @@ index 0000000..28e5f8d
 +	WorldDatabase.Execute(stmt);
 +
 +	ItemVip[item_id].vip = item_vip;
++};
++
++uint8 VIP::GetCreatureVIP(uint32 creature_id)
++{
++	return CKR[creature_id].vip;
++};
++
++uint32 VIP::GetCreatureMG(uint32 creature_id)
++{
++	return CKR[creature_id].mg;
++};
++
++void VIP::SetCreatureVIP(uint32 creature_id, uint8 creature_vip)
++{
++	if (creature_vip < 1) { creature_vip = 1; };
++	if (creature_vip > VIP_MAX) { creature_vip = VIP_MAX; };
++
++	PreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SET_CREATURE_VIP);
++	stmt->setUInt8(0, creature_vip);
++	stmt->setUInt32(1, creature_id);
++	WorldDatabase.Execute(stmt);
++
++	CKR[creature_id].vip = creature_vip;
++};
++
++void VIP::SetCreatureMG(uint32 creature_id, uint8 creature_mg)
++{
++	PreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SET_CREATURE_MG);
++	stmt->setUInt8(0, creature_mg);
++	stmt->setUInt32(1, creature_id);
++	WorldDatabase.Execute(stmt);
++
++	CKR[creature_id].mg = creature_mg;
 +};
 +
 +class Grumboz_VIP_Account_Engine : public AccountScript
@@ -466,7 +529,7 @@ index 0000000..28e5f8d
 +					data.mg = pmg;
 +					data.votes = pvotes;
 +
-+					VIP::SetVIP(accountId, pvip);
++					VIP::SetPlayerVIP(accountId, pvip);
 +
 +					TC_LOG_INFO("server.loading", "ACCOUNT::LOGIN ID:%u VIP:%u", accountId, Vip[accountId].vip);
 +				}
@@ -489,7 +552,7 @@ index 0000000..28e5f8d
 +
 +		uint32 guid = player->GetGUID();
 +		uint32 acct_id = player->GetSession()->GetAccountId();
-+		uint8 Pvip = VIP::GetVIP(acct_id);
++		uint8 Pvip = VIP::GetPlayerVIP(acct_id);
 +		bool lvl_enable = VIP::GetLEVELBONUS_ENABLE();
 +		uint8 xtra_levels = VIP::GetLEVELBONUS();
 +		uint8 Plvl = player->getLevel();
@@ -512,6 +575,62 @@ index 0000000..28e5f8d
 +			if (lvl_enable)
 +			{
 +				player->SetLevel(VIP_level_cap);
++			}
++		}
++	};
++
++	virtual void OnCreatureKill(Player* player, Creature* creature)
++	{
++		uint32 itemId = VIP::GetVIPMGID();
++		uint32 creatureId = creature->GetEntry();
++		uint8 cVip = urand(1, VIP::GetCreatureVIP(creatureId));
++		uint32 cMg = VIP::GetCreatureMG(creatureId);
++
++		if (cMg > 0)
++		{
++			if (player->GetGroup())
++			{
++				Group* group = player->GetGroup();
++
++				Group::MemberSlotList const &members = group->GetMemberSlots();
++
++				for (Group::MemberSlotList::const_iterator itr = members.begin(); itr != members.end(); ++itr)
++				{
++					Group::MemberSlot const &slot = *itr;
++					Player* player = ObjectAccessor::FindPlayer((*itr).guid);
++
++					if (player && player->GetSession())
++					{
++						uint32 accountId = player->GetSession()->GetAccountId();
++						uint32 MG = VIP::GetPlayerMG(accountId);
++						uint8 pVip = VIP::GetPlayerVIP(accountId);
++
++						uint32 reward = (cMg * cVip) * pVip;
++
++						ChatHandler(player->GetSession()).PSendSysMessage("+%u", reward);
++						if (!player->AddItem(itemId, reward))
++						{
++							VIP::SetPlayerMG(accountId, MG + reward);
++
++							ChatHandler(player->GetSession()).PSendSysMessage("Banked.");
++						}
++					}
++				}
++			}
++			else
++			{
++				uint32 accountId = player->GetSession()->GetAccountId();
++				uint32 MG = VIP::GetPlayerMG(accountId);
++				uint8 pVip = VIP::GetPlayerVIP(accountId);
++
++				uint32 reward = (cMg * cVip) * pVip;
++
++				if (!player->AddItem(itemId, reward))
++				{
++					VIP::SetPlayerMG(accountId, MG + reward);
++
++					ChatHandler(player->GetSession()).PSendSysMessage("+%u Banked.", reward);
++				}
 +			}
 +		}
 +	};
@@ -539,12 +658,11 @@ index 0000000..28e5f8d
 +		std::string repair_info = "repairs all the players items. Requires the player to possess a " + VIP_COIN_NAME + ".";
 +
 +		static std::vector<ChatCommand> vipCommandTable =
-+
 +		{
 +			{ "mall",		rbac::RBAC_IN_GRANTED_LIST, true, &HandleVipMallCommand, "Teleports the player to a VIP mall." },
 +			{ "home",		rbac::RBAC_IN_GRANTED_LIST, true, &HandleHomeCommand, "Teleports the player to there faction home mall." },
-+			{ "repair",		rbac::RBAC_IN_GRANTED_LIST, true, &HandleRepairCommand, repair_info },
 +			{ "hearthstone",rbac::RBAC_IN_GRANTED_LIST, true, &HandleHearthStoneCommand, "Teleports a player to there custom pre-set location." },
++			{ "repair",		rbac::RBAC_IN_GRANTED_LIST, true, &HandleRepairCommand, repair_info },
 +			{ "set",		rbac::RBAC_IN_GRANTED_LIST, true, NULL, "Player customizable commands.", vipCommandSetTable },
 +			{ "change",		rbac::RBAC_IN_GRANTED_LIST, true, NULL, "Character customizing commands.", vipCommandChangeTable },
 +		};
@@ -736,9 +854,9 @@ index 0000000..28e5f8d
 +		virtual bool OnUse(Player* player, Item* item, SpellCastTargets const& targets)
 +		{
 +			uint32 acct_id = player->GetSession()->GetAccountId();
-+			uint8 pVip = VIP::GetVIP(acct_id);
-+			uint32 pMg = VIP::GetMG(acct_id);
-+			uint32 pVotes = VIP::GetVOTES(acct_id);
++			uint8 pVip = VIP::GetPlayerVIP(acct_id);
++			uint32 pMg = VIP::GetPlayerMG(acct_id);
++			uint32 pVotes = VIP::GetPlayerVOTES(acct_id);
 +			std::string Votes_Required_Ann;
 +			bool voting = VIP::GetVIPVOTE_ENABLE();
 +
@@ -784,9 +902,9 @@ index 0000000..28e5f8d
 +		virtual bool OnUse(Player* player, Item* item, SpellCastTargets const& targets)
 +		{
 +			uint32 acct_id = player->GetSession()->GetAccountId();
-+			uint8 pVip = VIP::GetVIP(acct_id);
-+			uint32 pMg = VIP::GetMG(acct_id);
-+			uint32 pVotes = VIP::GetVOTES(acct_id);
++			uint8 pVip = VIP::GetPlayerVIP(acct_id);
++			uint32 pMg = VIP::GetPlayerMG(acct_id);
++			uint32 pVotes = VIP::GetPlayerVOTES(acct_id);
 +
 +			if (pVip >= VIP_MAX)
 +			{
@@ -796,9 +914,9 @@ index 0000000..28e5f8d
 +
 +			if (pVip < VIP_MAX)
 +			{
-+				VIP::SetVOTES(acct_id, pVotes + VIP_VOTE_COUNT); // must be first for the dead mans check
++				VIP::SetPlayerVOTES(acct_id, pVotes + VIP_VOTE_COUNT); // must be first for the dead mans check
 +
-+				VIP::SetVIP(acct_id, pVip + 1);
++				VIP::SetPlayerVIP(acct_id, pVip + 1);
 +
 +				RemoveItem(VIP_COIN_ID, player);
 +
@@ -816,11 +934,11 @@ index 0000000..28e5f8d
 +		{
 +
 +			uint32 accountId = player->GetSession()->GetAccountId();
-+			uint8 pVIP = VIP::GetVIP(accountId);
-+			uint32 MG = VIP::GetMG(accountId);
++			uint8 pVIP = VIP::GetPlayerVIP(accountId);
++			uint32 MG = VIP::GetPlayerMG(accountId);
 +			uint32 itemId = VIP::GetVIPMGID();
 +			uint32 pMg = player->GetItemCount(itemId);
-+			uint32 pVotes = VIP::GetVOTES(accountId);
++			uint32 pVotes = VIP::GetPlayerVOTES(accountId);
 +			std::string itemName = sObjectMgr->GetItemTemplate(itemId)->Name1;
 +			std::string currency_inBank;
 +			std::string deposit_amt;
@@ -885,11 +1003,11 @@ index 0000000..28e5f8d
 +			TC_LOG_INFO("server.loading", "MG_BANKER::OnSelect :%u", actions);
 +
 +			uint32 accountId = player->GetSession()->GetAccountId();
-+			uint8 pVIP = VIP::GetVIP(accountId);
-+			uint32 MG = VIP::GetMG(accountId);
++			uint8 pVIP = VIP::GetPlayerVIP(accountId);
++			uint32 MG = VIP::GetPlayerMG(accountId);
 +			uint32 itemId = VIP::GetVIPMGID();
 +			uint32 pMg = player->GetItemCount(itemId);
-+			uint32 pVotes = VIP::GetVOTES(accountId);
++			uint32 pVotes = VIP::GetPlayerVOTES(accountId);
 +
 +			switch (actions)
 +			{
@@ -907,7 +1025,7 @@ index 0000000..28e5f8d
 +
 +				if (player->GetItemCount(itemId) == 0)
 +				{
-+					VIP::SetMG(accountId, MG + pMg);
++					VIP::SetPlayerMG(accountId, MG + pMg);
 +
 +				};
 +
@@ -923,7 +1041,7 @@ index 0000000..28e5f8d
 +
 +				if (player->AddItem(itemId, 10))
 +				{
-+					VIP::SetMG(accountId, MG - 10);
++					VIP::SetPlayerMG(accountId, MG - 10);
 +					player->CLOSE_GOSSIP_MENU();
 +				}
 +				break;
@@ -934,7 +1052,7 @@ index 0000000..28e5f8d
 +
 +				if (player->AddItem(itemId, 100))
 +				{
-+					VIP::SetMG(accountId, MG - 101);
++					VIP::SetPlayerMG(accountId, MG - 101);
 +					player->CLOSE_GOSSIP_MENU();
 +				}
 +
@@ -946,7 +1064,7 @@ index 0000000..28e5f8d
 +
 +				if (player->AddItem(itemId, 1000))
 +				{
-+					VIP::SetMG(accountId, MG - 1010);
++					VIP::SetPlayerMG(accountId, MG - 1010);
 +					player->CLOSE_GOSSIP_MENU();
 +				}
 +
@@ -958,7 +1076,7 @@ index 0000000..28e5f8d
 +
 +				if (player->AddItem(itemId, 10000))
 +				{
-+					VIP::SetMG(accountId, MG - 10100);
++					VIP::SetPlayerMG(accountId, MG - 10100);
 +					player->CLOSE_GOSSIP_MENU();
 +				}
 +
@@ -970,7 +1088,7 @@ index 0000000..28e5f8d
 +
 +				if (player->AddItem(itemId, 100000))
 +				{
-+					VIP::SetMG(accountId, MG - 101000);
++					VIP::SetPlayerMG(accountId, MG - 101000);
 +					player->CLOSE_GOSSIP_MENU();
 +				}
 +
@@ -993,10 +1111,10 @@ index 0000000..28e5f8d
 +}
 diff --git a/src/server/game/Entities/Player/Grumboz_VIP_Core.h b/src/server/game/Entities/Player/Grumboz_VIP_Core.h
 new file mode 100644
-index 0000000..41d784a
+index 0000000..03555a3
 --- /dev/null
 +++ b/src/server/game/Entities/Player/Grumboz_VIP_Core.h
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,92 @@
 +
 +#ifndef GRUMBOZ_VIP_CORE_H
 +#define GRUMBOZ_VIP_CORE_H
@@ -1012,6 +1130,12 @@ index 0000000..41d784a
 +{
 +	uint32 item_id;
 +	uint8 vip;
++};
++
++struct CreatureVIP
++{
++	uint8 vip;
++	uint8 mg;
 +};
 +
 +struct VipMallGPS
@@ -1061,17 +1185,21 @@ index 0000000..41d784a
 +	static bool GetLEVELBONUS_ENABLE();
 +	static uint8 GetLEVELBONUS();
 +
++	static uint8 GetPlayerVIP(uint32 acct_id);
++	static uint32 GetPlayerMG(uint32 acct_id);
++	static uint32 GetPlayerVOTES(uint32 acct_id);
 +	static uint8 GetItemVIP(uint32 item_id);
-+	static uint8 GetVIP(uint32 acct_id);
-+	static uint32 GetMG(uint32 acct_id);
-+	static uint32 GetVOTES(uint32 acct_id);
++	static uint8 GetCreatureVIP(uint32 creature_id);
++	static uint32 GetCreatureMG(uint32 creature_id);
 +
 +	// Setterz
-+	static void SetVIP(uint32 acct_id, uint8 pvip);
-+	static void SetMG(uint32 acct_id, uint32 pmg);
-+	static void SetVOTES(uint32 acct_id, uint32 pvotes);
++	static void SetPlayerVIP(uint32 acct_id, uint8 pvip);
++	static void SetPlayerMG(uint32 acct_id, uint32 pmg);
++	static void SetPlayerVOTES(uint32 acct_id, uint32 pvotes);
 +	static void SetHearthStone(uint32 guid, uint32 map_id, float x, float y, float z, float o);
 +	static void SetItemVIP(uint32 item_id, uint8 item_vip);
++	static void SetCreatureVIP(uint32 creature_id, uint8 creature_vip);
++	static void SetCreatureMG(uint32 creature_id, uint8 creature_mg);
 +
 +private:
 +	// tools
@@ -1079,63 +1207,229 @@ index 0000000..41d784a
 +};
 +
 +#endif // GRUMBOZ_GUILD_WARZ_H_INCLUDED
-diff --git a/src/server/game/Entities/Player/Player.cpp b/src/server/game/Entities/Player/Player.cpp
-index e4a2918..cd76f10 100644
---- a/src/server/game/Entities/Player/Player.cpp
-+++ b/src/server/game/Entities/Player/Player.cpp
-@@ -43,6 +43,7 @@
- #include "GridNotifiers.h"
- #include "GridNotifiersImpl.h"
- #include "Group.h"
+diff --git a/src/server/game/Entities/Unit/StatSystem.cpp b/src/server/game/Entities/Unit/StatSystem.cpp
+index a8e13a9..a4a1239 100644
+--- a/src/server/game/Entities/Unit/StatSystem.cpp
++++ b/src/server/game/Entities/Unit/StatSystem.cpp
+@@ -20,10 +20,12 @@
+ #include "Player.h"
+ #include "Pet.h"
+ #include "Creature.h"
 +#include "Grumboz_VIP_Core.h"
- #include "GroupMgr.h"
- #include "Guild.h"
- #include "GuildMgr.h"
-@@ -11129,6 +11130,17 @@ InventoryResult Player::CanEquipNewItem(uint8 slot, uint16 &dest, uint32 item, b
+ #include "SharedDefines.h"
+ #include "SpellAuras.h"
+ #include "SpellAuraEffects.h"
+ #include "World.h"
++#include "WorldSession.h"
  
- InventoryResult Player::CanEquipItem(uint8 slot, uint16 &dest, Item* pItem, bool swap, bool not_loading) const
+ inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
  {
-+	// item VIP level 0 or 1 = all players can equip.
+@@ -242,7 +244,12 @@ void Player::UpdateResistances(uint32 school)
+ 
+ void Player::UpdateArmor()
+ {
+-    UnitMods unitMod = UNIT_MOD_ARMOR;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
 +	uint32 acctId = GetSession()->GetAccountId();
-+	uint8 Pvip = VIP::GetVIP(acctId);
-+	uint8 Ivip = VIP::GetItemVIP(pItem->GetEntry());
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
++	UnitMods unitMod = UNIT_MOD_ARMOR;
+ 
+     float value = GetModifierValue(unitMod, BASE_VALUE);    // base armor (from items)
+     value *= GetModifierValue(unitMod, BASE_PCT);           // armor percent from items
+@@ -259,7 +266,10 @@ void Player::UpdateArmor()
+ 
+     value *= GetModifierValue(unitMod, TOTAL_PCT);
+ 
+-    SetArmor(int32(value));
++	uint32 THP = (uint32)value * MOD;
++	int32 HPMOD = (int32)value + THP;
 +
-+	if (Pvip < Ivip)
-+	{
-+		ChatHandler(GetSession()).PSendSysMessage("|cffFF0000You Must be VIP%u or higher to equip this item.|r", Ivip);
-+		return EQUIP_ERR_ITEM_CANT_BE_EQUIPPED;
-+	}
++	SetArmor(int32(HPMOD));
+ 
+     Pet* pet = GetPet();
+     if (pet)
+@@ -289,14 +299,22 @@ float Player::GetManaBonusFromIntellect()
+ 
+ void Player::UpdateMaxHealth()
+ {
+-    UnitMods unitMod = UNIT_MOD_HEALTH;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
+ 
+-    float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
+-    value *= GetModifierValue(unitMod, BASE_PCT);
+-    value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
+-    value *= GetModifierValue(unitMod, TOTAL_PCT);
++	UnitMods unitMod = UNIT_MOD_HEALTH;
+ 
+-    SetMaxHealth((uint32)value);
++	float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
++	value *= GetModifierValue(unitMod, BASE_PCT);
++	value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
++	value *= GetModifierValue(unitMod, TOTAL_PCT);
 +
-     dest = 0;
-     if (pItem)
++	float THP = (uint32)value * MOD;
++	float HPMOD = (uint32)value + THP;
++
++	SetMaxHealth(uint32(HPMOD));
+ }
+ 
+ void Player::UpdateMaxPower(Powers power)
+@@ -514,7 +532,12 @@ void Player::UpdateShieldBlockValue()
+ 
+ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, float& minDamage, float& maxDamage)
+ {
+-    UnitMods unitMod;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
++	UnitMods unitMod;
+ 
+     switch (attType)
+     {
+@@ -537,8 +560,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
+     float totalValue = GetModifierValue(unitMod, TOTAL_VALUE);
+     float totalPct   = addTotalPct ? GetModifierValue(unitMod, TOTAL_PCT) : 1.0f;
+ 
+-    float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE);
+-    float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE);
++	float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE) + (GetWeaponDamageRange(attType, MINDAMAGE) / MOD);
++	float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE) + (GetWeaponDamageRange(attType, MAXDAMAGE) / MOD);
+ 
+     if (IsInFeralForm()) // check if player is druid and in cat or bear forms
+     {
+diff --git a/src/server/game/Entities/Unit/StatSystem.cpp b/src/server/game/Entities/Unit/StatSystem.cpp
+index a8e13a9..a4a1239 100644
+--- a/src/server/game/Entities/Unit/StatSystem.cpp
++++ b/src/server/game/Entities/Unit/StatSystem.cpp
+@@ -20,10 +20,12 @@
+ #include "Player.h"
+ #include "Pet.h"
+ #include "Creature.h"
++#include "Grumboz_VIP_Core.h"
+ #include "SharedDefines.h"
+ #include "SpellAuras.h"
+ #include "SpellAuraEffects.h"
+ #include "World.h"
++#include "WorldSession.h"
+ 
+ inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
+ {
+@@ -242,7 +244,12 @@ void Player::UpdateResistances(uint32 school)
+ 
+ void Player::UpdateArmor()
+ {
+-    UnitMods unitMod = UNIT_MOD_ARMOR;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
++	UnitMods unitMod = UNIT_MOD_ARMOR;
+ 
+     float value = GetModifierValue(unitMod, BASE_VALUE);    // base armor (from items)
+     value *= GetModifierValue(unitMod, BASE_PCT);           // armor percent from items
+@@ -259,7 +266,10 @@ void Player::UpdateArmor()
+ 
+     value *= GetModifierValue(unitMod, TOTAL_PCT);
+ 
+-    SetArmor(int32(value));
++	uint32 THP = (uint32)value * MOD;
++	int32 HPMOD = (int32)value + THP;
++
++	SetArmor(int32(HPMOD));
+ 
+     Pet* pet = GetPet();
+     if (pet)
+@@ -289,14 +299,22 @@ float Player::GetManaBonusFromIntellect()
+ 
+ void Player::UpdateMaxHealth()
+ {
+-    UnitMods unitMod = UNIT_MOD_HEALTH;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
+ 
+-    float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
+-    value *= GetModifierValue(unitMod, BASE_PCT);
+-    value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
+-    value *= GetModifierValue(unitMod, TOTAL_PCT);
++	UnitMods unitMod = UNIT_MOD_HEALTH;
+ 
+-    SetMaxHealth((uint32)value);
++	float value = GetModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
++	value *= GetModifierValue(unitMod, BASE_PCT);
++	value += GetModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
++	value *= GetModifierValue(unitMod, TOTAL_PCT);
++
++	float THP = (uint32)value * MOD;
++	float HPMOD = (uint32)value + THP;
++
++	SetMaxHealth(uint32(HPMOD));
+ }
+ 
+ void Player::UpdateMaxPower(Powers power)
+@@ -514,7 +532,12 @@ void Player::UpdateShieldBlockValue()
+ 
+ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bool addTotalPct, float& minDamage, float& maxDamage)
+ {
+-    UnitMods unitMod;
++	float VIP_OFFSET = VIP::GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = VIP::GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
++	UnitMods unitMod;
+ 
+     switch (attType)
+     {
+@@ -537,8 +560,8 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
+     float totalValue = GetModifierValue(unitMod, TOTAL_VALUE);
+     float totalPct   = addTotalPct ? GetModifierValue(unitMod, TOTAL_PCT) : 1.0f;
+ 
+-    float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE);
+-    float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE);
++	float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE) + (GetWeaponDamageRange(attType, MINDAMAGE) / MOD);
++	float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE) + (GetWeaponDamageRange(attType, MAXDAMAGE) / MOD);
+ 
+     if (IsInFeralForm()) // check if player is druid and in cat or bear forms
      {
 diff --git a/src/server/game/Scripting/ScriptLoader.cpp b/src/server/game/Scripting/ScriptLoader.cpp
-index 07ac1a2..1f26bfd 100644
+index 2922e4e..879de78 100644
 --- a/src/server/game/Scripting/ScriptLoader.cpp
 +++ b/src/server/game/Scripting/ScriptLoader.cpp
-@@ -32,6 +32,7 @@ void AddEventsScripts();
- void AddPetScripts();
- void AddOutdoorPvPScripts();
- void AddCustomScripts();
+@@ -1409,13 +1409,13 @@ void AddBattlegroundScripts()
+ 
+ #ifdef SCRIPTS
+ /* This is where custom scripts' loading functions should be declared. */
+-
 +void AddSC_Grumboz_VIP_Core();
  #endif
  
- void AddScripts()
-@@ -49,5 +50,6 @@ void AddScripts()
-     AddPetScripts();
-     AddOutdoorPvPScripts();
-     AddCustomScripts();
-+    AddSC_Grumboz_VIP_Core();
+ void AddCustomScripts()
+ {
+ #ifdef SCRIPTS
+     /* This is where custom scripts should be added. */
+-
++	AddSC_Grumboz_VIP_Core();
  #endif
  }
 diff --git a/src/server/worldserver/worldserver.conf.dist b/src/server/worldserver/worldserver.conf.dist
-index b320a85..3d55891 100644
+index 5026721..0ba5cdc 100644
 --- a/src/server/worldserver/worldserver.conf.dist
 +++ b/src/server/worldserver/worldserver.conf.dist
-@@ -3572,3 +3572,91 @@ PacketSpoof.BanDuration = 86400
+@@ -3553,3 +3553,92 @@ PacketSpoof.BanDuration = 86400
  
  #
  ###################################################################################################
++
 +###################################################################################################
 +# Grumbo'z VIP System
 +#
@@ -1224,3 +1518,4 @@ index b320a85..3d55891 100644
 +
 +#
 +###################################################################################################
+-- 3.3.5
