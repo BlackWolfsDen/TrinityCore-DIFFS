@@ -1,0 +1,900 @@
+
+diff --git a/src/server/game/Entities/Player/Player.cpp b/src/server/game/Entities/Player/Player.cpp
+--- a/src/server/game/Entities/Player/Player.cpp
++++ b/src/server/game/Entities/Player/Player.cpp
+@@ -95,6 +95,7 @@
+ #include "World.h"
+ #include "WorldPacket.h"
+ #include "WorldSession.h"
++#include "Grumboz_VIP_Core.h"
+ #ifdef ELUNA
+ #include "LuaEngine.h"
+ #endif
+@@ -2675,6 +2676,11 @@ void Player::GiveLevel(uint8 level)
+ 
+ void Player::InitTalentForLevel()
+ {
++	uint32 acct_id = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acct_id);
++	uint8 VIP_TP_BONUS = sVIP->GetTALENTBONUS();
++	uint8 TPMOD = (Pvip * VIP_TP_BONUS);
++	
+     uint8 level = getLevel();
+     // talents base at level diff (talents = level - 9 but some can be used already)
+     if (level < 10)
+@@ -2697,7 +2703,8 @@ void Player::InitTalentForLevel()
+         uint32 talentPointsForLevel = CalculateTalentsPoints();
+ 
+         // if used more that have then reset
+-        if (m_usedTalentCount > talentPointsForLevel)
++		if (m_usedTalentCount >(talentPointsForLevel + TPMOD))
++			// if (m_usedTalentCount > talentPointsForLevel)
+         {
+             if (!GetSession()->HasPermission(rbac::RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED))
+                 ResetTalents(true);
+@@ -2706,7 +2713,8 @@ void Player::InitTalentForLevel()
+         }
+         // else update amount of free points
+         else
+-            SetFreeTalentPoints(talentPointsForLevel - m_usedTalentCount);
++			SetFreeTalentPoints((talentPointsForLevel + TPMOD) - m_usedTalentCount);
++		//            SetFreeTalentPoints(talentPointsForLevel - m_usedTalentCount);
+     }
+ 
+     if (!GetSession()->PlayerLoading())
+@@ -3772,6 +3780,11 @@ bool Player::ResetTalents(bool no_cost)
+ {
+     sScriptMgr->OnPlayerTalentsReset(this, no_cost);
+ 
++	uint32 acct_id = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acct_id);
++	uint8 VIP_TP_BONUS = sVIP->GetTALENTBONUS();
++	uint8 TPMOD = (Pvip * VIP_TP_BONUS);
++	
+     // not need after this call
+     if (HasAtLoginFlag(AT_LOGIN_RESET_TALENTS))
+         RemoveAtLoginFlag(AT_LOGIN_RESET_TALENTS, true);
+@@ -3780,7 +3793,8 @@ bool Player::ResetTalents(bool no_cost)
+ 
+     if (m_usedTalentCount == 0)
+     {
+-        SetFreeTalentPoints(talentPointsForLevel);
++		SetFreeTalentPoints(talentPointsForLevel + TPMOD);
++		//    SetFreeTalentPoints(talentPointsForLevel);
+         return false;
+     }
+ 
+@@ -3842,7 +3856,8 @@ bool Player::ResetTalents(bool no_cost)
+     _SaveSpells(trans);
+     CharacterDatabase.CommitTransaction(trans);
+ 
+-    SetFreeTalentPoints(talentPointsForLevel);
++	SetFreeTalentPoints(talentPointsForLevel + TPMOD);
++//    SetFreeTalentPoints(talentPointsForLevel);
+ 
+     if (!no_cost)
+     {
+@@ -6384,6 +6399,13 @@ void Player::SendMovieStart(uint32 MovieId) const
+ 
+ void Player::CheckAreaExploreAndOutdoor()
+ {
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	float rate = sWorld->getRate(RATE_XP_EXPLORE);
++	float mod_rate = rate + (rate * MOD);
++	
+     if (!IsAlive())
+         return;
+ 
+@@ -6437,7 +6459,7 @@ void Player::CheckAreaExploreAndOutdoor()
+                 uint32 XP;
+                 if (diff < -5)
+                 {
+-                    XP = uint32(sObjectMgr->GetBaseXP(getLevel()+5)*sWorld->getRate(RATE_XP_EXPLORE));
++                    XP = uint32(sObjectMgr->GetBaseXP(getLevel()+5)*mod_rate);
+                 }
+                 else if (diff > 5)
+                 {
+@@ -6445,16 +6467,16 @@ void Player::CheckAreaExploreAndOutdoor()
+                     if (exploration_percent < 0)
+                         exploration_percent = 0;
+ 
+-                    XP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*exploration_percent/100*sWorld->getRate(RATE_XP_EXPLORE));
++                    XP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*exploration_percent/100* mod_rate);
+                 }
+                 else
+                 {
+-                    XP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*sWorld->getRate(RATE_XP_EXPLORE));
++                    XP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*mod_rate);
+                 }
+ 
+                 if (sWorld->getIntConfig(CONFIG_MIN_DISCOVERED_SCALED_XP_RATIO))
+                 {
+-                    uint32 minScaledXP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*sWorld->getRate(RATE_XP_EXPLORE)) * sWorld->getIntConfig(CONFIG_MIN_DISCOVERED_SCALED_XP_RATIO) / 100;
++                    uint32 minScaledXP = uint32(sObjectMgr->GetBaseXP(areaEntry->area_level)*mod_rate) * sWorld->getIntConfig(CONFIG_MIN_DISCOVERED_SCALED_XP_RATIO) / 100;
+                     XP = std::max(minScaledXP, XP);
+                 }
+ 
+@@ -7306,6 +7328,11 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
+ 
+ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply, bool only_level_scale /*= false*/)
+ {
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
+     if (slot >= INVENTORY_SLOT_BAG_END || !proto)
+         return;
+ 
+@@ -7348,124 +7375,124 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
+         switch (statType)
+         {
+             case ITEM_MOD_MANA:
+-                HandleStatFlatModifier(UNIT_MOD_MANA, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_MANA, BASE_VALUE, float(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HEALTH:                           // modify HP
+-                HandleStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_AGILITY:                          // modify agility
+-                HandleStatFlatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_STAT_AGILITY, BASE_VALUE, float(val + (val * MOD)), apply);
+                 UpdateStatBuffMod(STAT_AGILITY);
+                 break;
+             case ITEM_MOD_STRENGTH:                         //modify strength
+-                HandleStatFlatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_STAT_STRENGTH, BASE_VALUE, float(val + (val * MOD)), apply);
+                 UpdateStatBuffMod(STAT_STRENGTH);
+                 break;
+             case ITEM_MOD_INTELLECT:                        //modify intellect
+-                HandleStatFlatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_STAT_INTELLECT, BASE_VALUE, float(val + (val * MOD)), apply);
+                 UpdateStatBuffMod(STAT_INTELLECT);
+                 break;
+             case ITEM_MOD_SPIRIT:                           //modify spirit
+-                HandleStatFlatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_STAT_SPIRIT, BASE_VALUE, float(val + (val * MOD)), apply);
+                 UpdateStatBuffMod(STAT_SPIRIT);
+                 break;
+             case ITEM_MOD_STAMINA:                          //modify stamina
+-                HandleStatFlatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_STAT_STAMINA, BASE_VALUE, float(val + (val * MOD)), apply);
+                 UpdateStatBuffMod(STAT_STAMINA);
+                 break;
+             case ITEM_MOD_DEFENSE_SKILL_RATING:
+-                ApplyRatingMod(CR_DEFENSE_SKILL, int32(val), apply);
++                ApplyRatingMod(CR_DEFENSE_SKILL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_DODGE_RATING:
+-                ApplyRatingMod(CR_DODGE, int32(val), apply);
++                ApplyRatingMod(CR_DODGE, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_PARRY_RATING:
+-                ApplyRatingMod(CR_PARRY, int32(val), apply);
++                ApplyRatingMod(CR_PARRY, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_BLOCK_RATING:
+-                ApplyRatingMod(CR_BLOCK, int32(val), apply);
++                ApplyRatingMod(CR_BLOCK, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_MELEE_RATING:
+-                ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
++                ApplyRatingMod(CR_HIT_MELEE, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_RANGED_RATING:
+-                ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
++                ApplyRatingMod(CR_HIT_RANGED, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_SPELL_RATING:
+-                ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HIT_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_MELEE_RATING:
+-                ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_MELEE, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_RANGED_RATING:
+-                ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_RANGED, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_SPELL_RATING:
+-                ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_TAKEN_MELEE_RATING:
+-                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_TAKEN_RANGED_RATING:
+-                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_TAKEN_SPELL_RATING:
+-                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_TAKEN_MELEE_RATING:
+-                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_TAKEN_RANGED_RATING:
+-                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_TAKEN_SPELL_RATING:
+-                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HASTE_MELEE_RATING:
+-                ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
++                ApplyRatingMod(CR_HASTE_MELEE, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HASTE_RANGED_RATING:
+-                ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
++                ApplyRatingMod(CR_HASTE_RANGED, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HASTE_SPELL_RATING:
+-                ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HASTE_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_RATING:
+-                ApplyRatingMod(CR_HIT_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_HIT_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_HIT_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HIT_MELEE, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_HIT_RANGED, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_HIT_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_RATING:
+-                ApplyRatingMod(CR_CRIT_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_MELEE, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_RANGED, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HIT_TAKEN_RATING:
+-                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_MELEE, int32(val - (val * MOD)), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_RANGED, int32(val - (val * MOD)), apply);
++                ApplyRatingMod(CR_HIT_TAKEN_SPELL, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_CRIT_TAKEN_RATING:
+-                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val - (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val - (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val - (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_RESILIENCE_RATING:
+-                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_MELEE, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_RANGED, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_CRIT_TAKEN_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HASTE_RATING:
+-                ApplyRatingMod(CR_HASTE_MELEE, int32(val), apply);
+-                ApplyRatingMod(CR_HASTE_RANGED, int32(val), apply);
+-                ApplyRatingMod(CR_HASTE_SPELL, int32(val), apply);
++                ApplyRatingMod(CR_HASTE_MELEE, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_HASTE_RANGED, int32(val + (val * MOD)), apply);
++                ApplyRatingMod(CR_HASTE_SPELL, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_EXPERTISE_RATING:
+-                ApplyRatingMod(CR_EXPERTISE, int32(val), apply);
++                ApplyRatingMod(CR_EXPERTISE, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_ATTACK_POWER:
+-                HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val), apply);
+-                HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
++                HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(val + (val * MOD)), apply);
++                HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_RANGED_ATTACK_POWER:
+                 HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, TOTAL_VALUE, float(val), apply);
+@@ -7477,10 +7504,10 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
+                 ApplyManaRegenBonus(int32(val), apply);
+                 break;
+             case ITEM_MOD_ARMOR_PENETRATION_RATING:
+-                ApplyRatingMod(CR_ARMOR_PENETRATION, int32(val), apply);
++                ApplyRatingMod(CR_ARMOR_PENETRATION, int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_SPELL_POWER:
+-                ApplySpellPowerBonus(int32(val), apply);
++                ApplySpellPowerBonus(int32(val + (val * MOD)), apply);
+                 break;
+             case ITEM_MOD_HEALTH_REGEN:
+                 ApplyHealthRegenBonus(int32(val), apply);
+@@ -7489,7 +7516,7 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
+                 ApplySpellPenetrationBonus(val, apply);
+                 break;
+             case ITEM_MOD_BLOCK_VALUE:
+-                HandleBaseModFlatValue(SHIELD_BLOCK_VALUE, float(val), apply);
++                HandleBaseModFlatValue(SHIELD_BLOCK_VALUE, float(val + (val * MOD)), apply);
+                 break;
+             // deprecated item mods
+             case ITEM_MOD_SPELL_HEALING_DONE:
+@@ -7593,6 +7620,11 @@ void Player::_ApplyItemBonuses(ItemTemplate const* proto, uint8 slot, bool apply
+ 
+ void Player::_ApplyWeaponDamage(uint8 slot, ItemTemplate const* proto, ScalingStatValuesEntry const* ssv, bool apply)
+ {
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
+     WeaponAttackType attType = BASE_ATTACK;
+     float damage = 0.0f;
+ 
+@@ -7607,8 +7639,8 @@ void Player::_ApplyWeaponDamage(uint8 slot, ItemTemplate const* proto, ScalingSt
+         attType = OFF_ATTACK;
+     }
+ 
+-    float minDamage = proto->Damage[0].DamageMin;
+-    float maxDamage = proto->Damage[0].DamageMax;
++	float minDamage = proto->Damage[0].DamageMin + (proto->Damage[0].DamageMin / MOD);
++	float maxDamage = proto->Damage[0].DamageMax + (proto->Damage[0].DamageMax / MOD);
+ 
+     // If set dpsMod in ScalingStatValue use it for min (70% from average), max (130% from average) damage
+     if (ssv)
+@@ -8340,6 +8372,11 @@ void Player::SendLootRelease(ObjectGuid guid) const
+ 
+ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
+ {
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
+     if (ObjectGuid lguid = GetLootGUID())
+         m_session->DoLootRelease(lguid);
+ 
+@@ -8490,7 +8527,11 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
+                     loot->FillLoot(item->GetEntry(), LootTemplates_Milling, this, true);
+                     break;
+                 default:
+-                    loot->generateMoneyLoot(item->GetTemplate()->MinMoneyLoot, item->GetTemplate()->MaxMoneyLoot);
++					uint32 pGoldMin = item->GetTemplate()->MinMoneyLoot + (item->GetTemplate()->MinMoneyLoot * MOD);
++					uint32 pGoldMax = item->GetTemplate()->MaxMoneyLoot + (item->GetTemplate()->MaxMoneyLoot * MOD);
++
++					loot->generateMoneyLoot(pGoldMin, pGoldMax);
++					//                    loot->generateMoneyLoot(item->GetTemplate()->MinMoneyLoot, item->GetTemplate()->MaxMoneyLoot);
+                     loot->FillLoot(item->GetEntry(), LootTemplates_Item, this, true, loot->gold != 0);
+ 
+                     // Force save the loot and money items that were just rolled
+@@ -8573,7 +8614,8 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
+                     // Generate extra money for pick pocket loot
+                     const uint32 a = urand(0, creature->getLevel() / 2);
+                     const uint32 b = urand(0, getLevel() / 2);
+-                    loot->gold = uint32(10 * (a + b) * sWorld->getRate(RATE_DROP_MONEY));
++					loot->gold = uint32(10 * (a + b) * (sWorld->getRate(RATE_DROP_MONEY) + MOD));
++//                    loot->gold = uint32(10 * (a + b) * sWorld->getRate(RATE_DROP_MONEY));
+                     permission = OWNER_PERMISSION;
+                 }
+                 else
+@@ -11193,6 +11235,16 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16 &dest, Item* pItem, bool
+     dest = 0;
+     if (pItem)
+     {
++		uint32 acctId = GetSession()->GetAccountId();
++		uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++		uint8 Ivip = sVIP->GetItemVIP(pItem->GetEntry());
++
++		if (Pvip < Ivip)
++		{
++			ChatHandler(GetSession()).PSendSysMessage("|cffFF0000You Must be VIP%u or higher to equip this item.|r", Ivip);
++			return EQUIP_ERR_CANT_DO_RIGHT_NOW;
++		}
++		
+         TC_LOG_DEBUG("entities.player.items", "Player::CanEquipItem: Player '%s' (%s), Slot: %u, Item: %u, Count: %u",
+             GetName().c_str(), GetGUID().ToString().c_str(), slot, pItem->GetEntry(), pItem->GetCount());
+         ItemTemplate const* pProto = pItem->GetTemplate();
+@@ -11592,6 +11644,16 @@ InventoryResult Player::CanUseItem(Item* pItem, bool not_loading) const
+ {
+     if (pItem)
+     {
++		uint32 acctId = GetSession()->GetAccountId();
++		uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++		uint8 Ivip = sVIP->GetItemVIP(pItem->GetEntry());
++
++		if (Pvip < Ivip)
++		{
++			ChatHandler(GetSession()).PSendSysMessage("|cffFF0000You Must be VIP%u or higher to use this item.|r", Ivip);
++			return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
++		}
++		
+         TC_LOG_DEBUG("entities.player.items", "Player::CanUseItem: Player '%s' (%s),  Item: %u",
+             GetName().c_str(), GetGUID().ToString().c_str(), pItem->GetEntry());
+ 
+diff --git a/src/server/game/Entities/Unit/StatSystem.cpp b/src/server/game/Entities/Unit/StatSystem.cpp
+--- a/src/server/game/Entities/Unit/StatSystem.cpp
++++ b/src/server/game/Entities/Unit/StatSystem.cpp
+@@ -27,6 +27,7 @@
+ #include "SpellMgr.h"
+ #include "World.h"
+ #include <numeric>
++#include "Grumboz_VIP_Core.h"
+ 
+ inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
+ {
+@@ -254,6 +255,11 @@ void Player::UpdateResistances(uint32 school)
+ 
+ void Player::UpdateArmor()
+ {
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++	
+     UnitMods unitMod = UNIT_MOD_ARMOR;
+ 
+     float value = GetFlatModifierValue(unitMod, BASE_VALUE);    // base armor (from items)
+@@ -271,7 +277,9 @@ void Player::UpdateArmor()
+ 
+     value *= GetPctModifierValue(unitMod, TOTAL_PCT);
+ 
+-    SetArmor(int32(value));
++	uint32 THP = (uint32)value * MOD;
++	int32 HPMOD = (int32)value + THP;
++	SetArmor(int32(HPMOD)); // SetArmor(int32(value));
+ 
+     Pet* pet = GetPet();
+     if (pet)
+@@ -299,6 +307,27 @@ float Player::GetManaBonusFromIntellect()
+     return baseInt + (moreInt * 15.0f);
+ }
+ 
++void Player::UpdateMaxHealth()
++{
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++
++	UnitMods unitMod = UNIT_MOD_HEALTH;
++
++	float value = GetFlatModifierValue(unitMod, BASE_VALUE) + GetCreateHealth();
++	value *= GetPctModifierValue(unitMod, BASE_PCT);
++	value += GetFlatModifierValue(unitMod, TOTAL_VALUE) + GetHealthBonusFromStamina();
++	value *= GetPctModifierValue(unitMod, TOTAL_PCT);
++
++	float THP = (uint32)value * MOD;
++	float HPMOD = (uint32)value + THP;
++
++	SetMaxHealth(uint32(HPMOD));
++}
++
++/*
+ void Player::UpdateMaxHealth()
+ {
+     UnitMods unitMod = UNIT_MOD_HEALTH;
+@@ -310,7 +339,28 @@ void Player::UpdateMaxHealth()
+ 
+     SetMaxHealth((uint32)value);
+ }
++*/
+ 
++void Player::UpdateMaxPower(Powers power)
++{
++	float VIP_OFFSET = sVIP->GetVIPOFFSET();
++	uint32 acctId = GetSession()->GetAccountId();
++	uint8 Pvip = sVIP->GetPlayerVIP(acctId);
++	float MOD = (Pvip * VIP_OFFSET);
++
++	UnitMods unitMod = UnitMods(UNIT_MOD_POWER_START + power);
++
++	float bonusPower = (power == POWER_MANA && GetCreatePowers(power) > 0) ? GetManaBonusFromIntellect() : 0;
++
++	float value = GetFlatModifierValue(unitMod, BASE_VALUE) + GetCreatePowers(power);
++	value *= GetPctModifierValue(unitMod, BASE_PCT);
++	value += GetFlatModifierValue(unitMod, TOTAL_VALUE) + bonusPower;
++	value *= GetPctModifierValue(unitMod, TOTAL_PCT);
++
++	SetMaxPower(power, uint32(value + (value * MOD)));
++}
++
++/*
+ void Player::UpdateMaxPower(Powers power)
+ {
+     UnitMods unitMod = UnitMods(UNIT_MOD_POWER_START + power);
+@@ -324,6 +374,7 @@ void Player::UpdateMaxPower(Powers power)
+ 
+     SetMaxPower(power, uint32(value));
+ }
++*/
+ 
+ void Player::ApplyFeralAPBonus(int32 amount, bool apply)
+ {
+diff --git a/src/server/scripts/Custom/custom_script_loader.cpp b/src/server/scripts/Custom/custom_script_loader.cpp
+--- a/src/server/scripts/Custom/custom_script_loader.cpp
++++ b/src/server/scripts/Custom/custom_script_loader.cpp
+@@ -17,9 +17,12 @@
+ 
+ // This is where scripts' loading functions should be declared:
+ 
++void AddSC_Grumboz_VIP_Core();
+ 
+ // The name of this function should match:
+ // void Add${NameOfDirectory}Scripts()
+ void AddCustomScripts()
+ {
++	AddSC_Grumboz_VIP_Core();
++
+ }
+diff --git a/src/server/game/LuaEngine/LuaFunctions.cpp b/src/server/game/LuaEngine/LuaFunctions.cpp
+--- a/src/server/game/LuaEngine/LuaFunctions.cpp
++++ b/src/server/game/LuaEngine/LuaFunctions.cpp
+@@ -36,6 +36,7 @@ extern "C"
+ #include "CorpseMethods.h"
+ #include "VehicleMethods.h"
+ #include "BattleGroundMethods.h"
++#include "Grumboz_VIP_Core.h"
+ 
+ luaL_Reg GlobalMethods[] =
+ {
+@@ -75,6 +76,15 @@ luaL_Reg GlobalMethods[] =
+     { "ClearInstanceEvents", &LuaGlobalFunctions::ClearInstanceEvents },
+ 
+     // Getters
++	// Grumboz VIP Engine global methods 
++	{ "GetVIPMAX", &LuaGlobalFunctions::GetVIPMAX },			// GetVIPMAX(); returns maximum VIP rank.
++	{ "GetVIPVOTECOUNT", &LuaGlobalFunctions::GetVIPVOTECOUNT },// GetVIPVOTECOUNT(); returns how many votes to rank up VIP +1 rank.
++	{ "GetVIPCOINID", &LuaGlobalFunctions::GetVIPCOINID },		// GetVIPCOINID(); returns item id.
++	{ "GetVIPSTONEID", &LuaGlobalFunctions::GetVIPSTONEID },	// GetVIPSTONEID(); returns item id.
++	{ "GetVIPMGID", &LuaGlobalFunctions::GetVIPMGID },			// GetVIPMGID(); returns item id.
++	{ "GetVIPOFFSET", &LuaGlobalFunctions::GetVIPOFFSET },		// GetVIPOFFSET(); returns float offset value.
++	{ "GetTALENTBONUS", &LuaGlobalFunctions::GetTALENTBONUS },	// GetTALENTBONUS(); returns how many extra tp per VIP rank.
++	{ "GetLEVELBONUS", &LuaGlobalFunctions::GetLEVELBONUS },	// GetLEVELBONUS(); returns how many extra levels per VIP rank.
+     { "GetLuaEngine", &LuaGlobalFunctions::GetLuaEngine },
+     { "GetCoreName", &LuaGlobalFunctions::GetCoreName },
+     { "GetCoreVersion", &LuaGlobalFunctions::GetCoreVersion },
+@@ -110,6 +120,9 @@ luaL_Reg GlobalMethods[] =
+     { "PrintDebug", &LuaGlobalFunctions::PrintDebug },
+ 
+     // Boolean
++	// Grumboz VIP Engine global methods 
++	{ "GetVIPVOTE_ENABLE", &LuaGlobalFunctions::GetVIPVOTE_ENABLE },			// GetVIPVOTE_ENABLE(); returns bool value. ?Do Votes increase VIP ranks?
++	{ "GetLEVELBONUS_ENABLE", &LuaGlobalFunctions::GetLEVELBONUS_ENABLE },		// GetLEVELBONUS_ENABLE(); returns bool value. do players get extra levels per VIP rank.
+     { "IsInventoryPos", &LuaGlobalFunctions::IsInventoryPos },
+     { "IsEquipmentPos", &LuaGlobalFunctions::IsEquipmentPos },
+     { "IsBankPos", &LuaGlobalFunctions::IsBankPos },
+@@ -437,6 +450,10 @@ ElunaRegister<Unit> UnitMethods[] =
+ ElunaRegister<Player> PlayerMethods[] =
+ {
+     // Getters
++	// Grumboz VIP Engine player getter methods
++	{ "GetPlayerVIP", &LuaPlayer::GetPlayerVIP },				// player:GetPlayerVIP(); returns uint8 value of a players VIP rank.
++	{ "GetPlayerMG", &LuaPlayer::GetPlayerMG },					// player:GetPlayerMG(); returns uint32 value of players total mg stored.(NOT IN INVENTORY)
++	{ "GetPlayerVOTES", &LuaPlayer::GetPlayerVOTES },			// player:GetPlayerVOTES(); returns uint32 value of players total voting count.
+     { "GetSelection", &LuaPlayer::GetSelection },
+     { "GetGMRank", &LuaPlayer::GetGMRank },
+     { "GetGuildId", &LuaPlayer::GetGuildId },
+@@ -521,6 +538,10 @@ ElunaRegister<Player> PlayerMethods[] =
+ #endif
+ 
+     // Setters
++	// Grumboz VIP Engine player setter methods 
++	{ "SetPlayerVIP", &LuaPlayer::SetPlayerVIP },
++	{ "SetPlayerMG", &LuaPlayer::SetPlayerMG },
++	{ "SetPlayerVOTES", &LuaPlayer::SetPlayerVOTES },
+     { "AdvanceSkillsToMax", &LuaPlayer::AdvanceSkillsToMax },
+     { "AdvanceSkill", &LuaPlayer::AdvanceSkill },
+     { "AdvanceAllSkills", &LuaPlayer::AdvanceAllSkills },
+@@ -759,6 +780,9 @@ ElunaRegister<Player> PlayerMethods[] =
+ ElunaRegister<Creature> CreatureMethods[] =
+ {
+     // Getters
++	// Grumboz VIP Engine creature getter methods
++	{ "GetCreatureVIP", &LuaCreature::GetCreatureVIP },				// creature:GetCreatureVIP(uint32 creature_id); returns uint8 value of a creatures VIP rank.
++	{ "GetCreatureMG", &LuaCreature::GetCreatureMG },				// creature:GetCreatureMG(uint32 creature_id); returns uint32 value of creature mg .
+     { "GetAITarget", &LuaCreature::GetAITarget },
+     { "GetAITargets", &LuaCreature::GetAITargets },
+     { "GetAITargetsCount", &LuaCreature::GetAITargetsCount },
+@@ -787,6 +811,9 @@ ElunaRegister<Creature> CreatureMethods[] =
+     { "GetDBTableGUIDLow", &LuaCreature::GetDBTableGUIDLow },
+ 
+     // Setters
++	// Grumboz VIP Engine creature setter methods
++	{ "SetCreatureVIP", &LuaCreature::SetCreatureVIP },				// creature:SetCreatureVIP(uint32 creature_id); sets  uint8 value of a creatures VIP rank.
++	{ "SetCreatureMG", &LuaCreature::SetCreatureMG },				// creature:SetCreatureMG(uint32 creature_id); sets uint32 value of creature mg .
+     { "SetHover", &LuaCreature::SetHover },
+     { "SetDisableGravity", &LuaCreature::SetDisableGravity },
+     { "SetAggroEnabled", &LuaCreature::SetAggroEnabled },
+@@ -895,6 +922,8 @@ ElunaRegister<GameObject> GameObjectMethods[] =
+ ElunaRegister<Item> ItemMethods[] =
+ {
+     // Getters
++	// Grumboz VIP Engine item getter methods 
++	{ "GetItemVIP", &LuaItem::GetItemVIP },
+     { "GetOwnerGUID", &LuaItem::GetOwnerGUID },
+     { "GetOwner", &LuaItem::GetOwner },
+     { "GetCount", &LuaItem::GetCount },
+@@ -929,6 +958,8 @@ ElunaRegister<Item> ItemMethods[] =
+     { "GetBagSize", &LuaItem::GetBagSize },
+ 
+     // Setters
++	// Grumboz VIP Engine item Setter methods 
++	{ "SetItemVIP", &LuaItem::SetItemVIP },
+     { "SetOwner", &LuaItem::SetOwner },
+     { "SetBinding", &LuaItem::SetBinding },
+     { "SetCount", &LuaItem::SetCount },
+@@ -1104,6 +1135,8 @@ ElunaRegister<Guild> GuildMethods[] =
+     { "Disband", &LuaGuild::Disband },
+     { "AddMember", &LuaGuild::AddMember },
+     { "DeleteMember", &LuaGuild::DeleteMember },
++	{ "DepositBankMoney", &LuaGuild::DepositBankMoney },
++	{ "WithdrawBankMoney", &LuaGuild::WithdrawBankMoney },
+ 
+     { NULL, NULL }
+ };
+diff --git a/src/server/game/LuaEngine/PlayerMethods.h b/src/server/game/LuaEngine/PlayerMethods.h
+--- a/src/server/game/LuaEngine/PlayerMethods.h
++++ b/src/server/game/LuaEngine/PlayerMethods.h
+@@ -4,6 +4,8 @@
+ * Please see the included DOCS/LICENSE.md for more information
+ */
+ 
++#include "Grumboz_VIP_Core.h"
++
+ #ifndef PLAYERMETHODS_H
+ #define PLAYERMETHODS_H
+ 
+@@ -13,6 +15,47 @@
+ namespace LuaPlayer
+ {
+ #if (!defined(TBC) && !defined(CLASSIC))
++	// Grumboz VIP Engine player methods
++	int GetPlayerVIP(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		Eluna::Push(L, sVIP->GetPlayerVIP(acctId));
++		return 1;
++	}
++	int GetPlayerMG(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		Eluna::Push(L, sVIP->GetPlayerMG(acctId));
++		return 1;
++	}
++	int GetPlayerVOTES(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		Eluna::Push(L, sVIP->GetPlayerVOTES(acctId));
++		return 1;
++	}
++	int SetPlayerVIP(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		uint8 vip = Eluna::CHECKVAL<uint8>(L, 2);
++		sVIP->SetPlayerVIP(acctId, vip);
++		return 0;
++	}
++	int SetPlayerMG(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		uint32 mg = Eluna::CHECKVAL<uint32>(L, 2);
++		sVIP->SetPlayerMG(acctId, mg);
++		return 0;
++	}
++	int SetPlayerVOTES(lua_State* L, Player* player)
++	{
++		uint32 acctId = player->GetSession()->GetAccountId();
++		uint32 votes = Eluna::CHECKVAL<uint32>(L, 2);
++		sVIP->SetPlayerVOTES(acctId, votes);
++		return 0;
++	}
++	
+     /**
+      * Returns 'true' if the [Player] can Titan Grip, 'false' otherwise.
+      *
+diff --git a/src/server/game/LuaEngine/CreatureMethods.h b/src/server/game/LuaEngine/CreatureMethods.h
+--- a/src/server/game/LuaEngine/CreatureMethods.h
++++ b/src/server/game/LuaEngine/CreatureMethods.h
+@@ -7,6 +7,8 @@
+ #ifndef CREATUREMETHODS_H
+ #define CREATUREMETHODS_H
+ 
++#include "Grumboz_VIP_Core.h"
++
+ /***
+  * Non-[Player] controlled [Unit]s (i.e. NPCs).
+  *
+@@ -14,6 +16,37 @@
+  */
+ namespace LuaCreature
+ {
++	// Grumboz VIP Engine creature methods
++	int GetCreatureVIP(lua_State* L, Creature* creature)
++	{
++		uint32 creature_id = creature->GetEntry();
++
++		Eluna::Push(L, sVIP->GetCreatureVIP(creature_id));
++		return 1;
++	}
++	int GetCreatureMG(lua_State* L, Creature* creature)
++	{
++		uint32 creature_id = creature->GetEntry();
++
++		Eluna::Push(L, sVIP->GetCreatureMG(creature_id));
++		return 1;
++	}
++	int SetCreatureVIP(lua_State* L, Creature* creature)
++	{
++		uint32 creature_id = creature->GetEntry();
++		uint8 vip = Eluna::CHECKVAL<uint8>(L, 2);
++
++		sVIP->SetCreatureVIP(creature_id, vip);
++		return 0;
++	}
++	int SetCreatureMG(lua_State* L, Creature* creature)
++	{
++		uint32 creature_id = creature->GetEntry();
++		uint32 mg = Eluna::CHECKVAL<uint32>(L, 2);
++
++		sVIP->SetCreatureMG(creature_id, mg);
++		return 0;
++	}
+     /**
+      * Returns `true` if the [Creature] is set to not give reputation when killed,
+      *   and returns `false` otherwise.
+diff --git a/src/server/game/LuaEngine/GlobalMethods.h b/src/server/game/LuaEngine/GlobalMethods.h
+--- a/src/server/game/LuaEngine/GlobalMethods.h
++++ b/src/server/game/LuaEngine/GlobalMethods.h
+@@ -8,12 +8,64 @@
+ #define GLOBALMETHODS_H
+ 
+ #include "BindingMap.h"
++#include "Grumboz_VIP_Core.h"
+ 
+ /***
+  * These functions can be used anywhere at any time, including at start-up.
+  */
+ namespace LuaGlobalFunctions
+ {
++	// Grumboz VIP Engine player methods
++	int GetVIPMAX(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPMAX());
++		return 1;
++	}
++	int GetVIPVOTE_ENABLE(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPVOTE_ENABLE());
++		return 1;
++	}
++	int GetVIPVOTECOUNT(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPVOTECOUNT());
++		return 1;
++	}
++	int GetVIPCOINID(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPCOINID());
++		return 1;
++	}
++	int GetVIPSTONEID(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPSTONEID());
++		return 1;
++	}
++	int GetVIPMGID(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPMGID());
++		return 1;
++	}
++	int GetVIPOFFSET(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetVIPOFFSET());
++		return 1;
++	}
++	int GetTALENTBONUS(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetTALENTBONUS());
++		return 1;
++	}
++	int GetLEVELBONUS_ENABLE(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetLEVELBONUS_ENABLE());
++		return 1;
++	}
++	int GetLEVELBONUS(lua_State* L)
++	{
++		Eluna::Push(L, sVIP->GetLEVELBONUS());
++		return 1;
++	}
+     /**
+      * Returns Lua engine's name.
+      *
+diff --git a/src/server/game/LuaEngine/GuildMethods.h b/src/server/game/LuaEngine/GuildMethods.h
+--- a/src/server/game/LuaEngine/GuildMethods.h
++++ b/src/server/game/LuaEngine/GuildMethods.h
+@@ -293,5 +293,48 @@ namespace LuaGuild
+ #endif
+         return 0;
+     }
++	// other
++#ifndef CLASSIC
++		// Move to Player methods
++		/**
++		* Windraws money from the [Guild] bank
++		*
++		* @param [Player] player
++		* @param uint32 money
++		*/
++		int WithdrawBankMoney(lua_State* L, Guild* guild)
++	{
++		Player* player = Eluna::CHECKOBJ<Player>(L, 2);
++		uint32 money = Eluna::CHECKVAL<uint32>(L, 3);
++#ifndef TRINITY
++		if (guild->GetGuildBankMoney() < money)
++			return 0;
++		guild->SetBankMoney(guild->GetGuildBankMoney() - money);
++#else
++		guild->HandleMemberWithdrawMoney(player->GetSession(), money);
++#endif
++		return 0;
++	}
++
++	// Move to Player methods
++	/**
++	* Deposits money to the [Guild] bank
++	*
++	* @param [Player] player
++	* @param uint32 money
++	*/
++	int DepositBankMoney(lua_State* L, Guild* guild)
++	{
++		Player* player = Eluna::CHECKOBJ<Player>(L, 2);
++		uint32 money = Eluna::CHECKVAL<uint32>(L, 3);
++
++#ifndef TRINITY
++		guild->SetBankMoney(guild->GetGuildBankMoney() + money);
++#else
++		guild->HandleMemberDepositMoney(player->GetSession(), money);
++#endif
++		return 0;
++	}
++#endif
+ };
+ #endif
+diff --git a/src/server/game/LuaEngine/ItemMethods.h b/src/server/game/LuaEngine/ItemMethods.h
+--- a/src/server/game/LuaEngine/ItemMethods.h
++++ b/src/server/game/LuaEngine/ItemMethods.h
+@@ -7,11 +7,28 @@
+ #ifndef ITEMMETHODS_H
+ #define ITEMMETHODS_H
+ 
++#include "Grumboz_VIP_Core.h"
++
+ /***
+  * Inherits all methods from: [Object]
+  */
+ namespace LuaItem
+ {
++	// Grumboz VIP Engine item methods
++	int GetItemVIP(lua_State* L, Item* item)
++	{
++		uint32 item_id = item->GetEntry();
++		Eluna::Push(L, sVIP->GetItemVIP(item_id));
++		return 1;
++	}
++	int SetItemVIP(lua_State* L, Item* item)
++	{
++		uint32 item_id = item->GetEntry();
++		uint8 vip = Eluna::CHECKVAL<uint8>(L, 2);
++		sVIP->SetItemVIP(item_id, vip);
++		return 1;
++	}
++	
+     /**
+      * Returns 'true' if the [Item] is soulbound, 'false' otherwise
+      *
